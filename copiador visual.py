@@ -86,6 +86,8 @@ class WorkerCopia(QThread):
         self.todos_los_errores = []
         self.validacion_autorizaciones = {}
         self.respuesta_pregunta = {}
+        self.archivos_encontrados = []  # <---- AÑADIDA
+        self.directorios_a_copiar = set() # AÑADIDA
 
     def find_all_keys_with_context(self, obj, target, context=None, results=None, path=None):
         if results is None:
@@ -120,139 +122,38 @@ class WorkerCopia(QThread):
     def run(self):
         try:
             self.tiempo_inicio = time.time()
-            self.log_signal.emit("Iniciando copia de directorios...")
+            self.log_signal.emit("Iniciando proceso de copia de directorios...")
             self.log_signal.emit(f"Directorios origen iniciales: {self.directorios_origen}")
-            self.preparar_conteo_archivos()
 
-            directorios_a_copiar = self.directorios_origen
+            self.archivos_encontrados = []
+            self.buscar_archivos()  # Llamada a la nueva función de búsqueda
+            if self.cancelar_flag:
+                self.log_signal.emit("Proceso cancelado por el usuario durante la búsqueda.")
+                self.finalizado_signal.emit()
+                return
+
+            self.directorios_a_validar = list(self.directorios_origen) # Inicializamos con todos los directorios origen
+            self.directorios_a_copiar = set() # Se llenará en validar_archivos
             self.todos_los_errores = []
+            self.validacion_autorizaciones = {}
+            self.respuesta_pregunta = {}
 
-            if self.copiar_todo:
-                self.log_signal.emit("Copiando todos los directorios sin validaciones...")
-                directorios_a_copiar_final = directorios_a_copiar
+            if not self.copiar_todo:
+                self.validar_archivos()  # Llamada a la nueva función de validación
+                if self.cancelar_flag:
+                    self.log_signal.emit("Proceso cancelado por el usuario durante la validación.")
+                    self.finalizado_signal.emit()
+                    return
+                self.log_signal.emit(f"Directorios aprobados para copiar tras validaciones: {self.directorios_a_copiar}")
             else:
-                problemas_rips = []
-                directorios_problematicos_rips = set()
-                directorios_problematicos_docker = set()
-                directorios_problematicos_archivos = set()
+                self.log_signal.emit("Copiando todos los directorios sin validaciones posteriores a la búsqueda inicial.")
+                self.directorios_a_copiar = set(self.directorios_origen)
 
-                # Validación de RIPS
-                for dir_origen in self.directorios_origen:
-                    rips_path = os.path.join(dir_origen, "RIPS")
-                    nombre_directorio = os.path.basename(dir_origen)
-                    rips_existe = os.path.isdir(rips_path)
-                    self.log_signal.emit(f"Validando RIPS en {dir_origen} - Existe: {rips_existe}")
-                    if not rips_existe:
-                        error_msg = f"- '{nombre_directorio}': No se encontró la carpeta 'RIPS'"
-                        problemas_rips.append(error_msg)
-                        directorios_problematicos_rips.add(dir_origen)
-
-                if problemas_rips:
-                    mensaje_rips = "Los siguientes directorios no cuentan con la carpeta 'RIPS':\n" + "\n".join(problemas_rips) + "\n\n¿Desea copiar estos directorios?"
-                    self.respuesta_usuario = None
-                    self.pregunta_signal.emit(mensaje_rips, QMessageBox.Yes | QMessageBox.No)
-                    while self.respuesta_usuario is None and not self.cancelar_flag:
-                        time.sleep(0.1)
-                    if self.respuesta_usuario == QMessageBox.No:
-                        directorios_a_copiar = [d for d in directorios_a_copiar if d not in directorios_problematicos_rips]
-                        self.log_signal.emit(f"Directorios omitidos por RIPS: {directorios_problematicos_rips}")
-                    self.todos_los_errores.extend(problemas_rips)
-
-                # Validación de ResultState en Docker por directorio
-                directorios_a_validar = directorios_a_copiar[:]
-                for dir_origen in directorios_a_validar:
-                    nombre_directorio = os.path.basename(dir_origen)
-                    docker_files = [
-                        os.path.join(root, file)
-                        for root, _, files in os.walk(dir_origen)
-                        for file in files
-                        if file.startswith("ResultadosDoker_") and file.endswith(".json")
-                    ]
-                    self.log_signal.emit(f"Archivos Docker en {dir_origen}: {docker_files}")
-                    result_state_encontrado = False
-                    if not docker_files:
-                        continue  # Si no hay archivos Docker, no validamos ResultState
-
-                    for ruta_docker in docker_files:
-                        data = None
-                        for encoding in ['utf-8', 'latin-1', 'windows-1252']:
-                            try:
-                                with open(ruta_docker, 'r', encoding=encoding) as f:
-                                    data = json.load(f)
-                                self.log_signal.emit(f"{ruta_docker} leído con codificación {encoding}")
-                                break
-                            except UnicodeDecodeError:
-                                continue
-                            except json.JSONDecodeError:
-                                self.log_signal.emit(f"{ruta_docker} no se pudo leer como JSON")
-                                break
-                        if data is None:
-                            self.log_signal.emit(f"{ruta_docker}: No se pudo decodificar con ninguna codificación soportada")
-                            continue
-
-                        result_state_key = next((key for key in data.keys() if key.lower() == "resultstate"), None)
-                        if result_state_key and data[result_state_key]:
-                            result_state_encontrado = True
-                            self.log_signal.emit(f"{ruta_docker} tiene ResultState: true")
-                            break
-
-                    if not result_state_encontrado:
-                        mensaje_docker = f"El directorio '{nombre_directorio}' tiene ResultState false, no tiene ResultState o no se pudo leer ningún archivo Docker. ¿Desea copiar este directorio?"
-                        self.respuesta_usuario = None
-                        self.pregunta_signal.emit(mensaje_docker, QMessageBox.Yes | QMessageBox.No)
-                        while self.respuesta_usuario is None and not self.cancelar_flag:
-                            time.sleep(0.1)
-                        if self.respuesta_usuario == QMessageBox.No:
-                            directorios_a_copiar.remove(dir_origen)
-                            directorios_problematicos_docker.add(dir_origen)
-                            error_msg = f"- '{nombre_directorio}': No se encontró un archivo ResultadosDoker válido con 'ResultState: true' (omitido por usuario)"
-                            self.todos_los_errores.append(error_msg)
-                            self.log_signal.emit(f"Directorio {nombre_directorio} omitido por ResultState o error de lectura")
-                        else:
-                            error_msg = f"- '{nombre_directorio}': No se encontró un archivo ResultadosDoker válido con 'ResultState: true' (copiado por usuario)"
-                            self.todos_los_errores.append(error_msg)
-                            self.log_signal.emit(f"Directorio {nombre_directorio} copiado a pesar de ResultState o error de lectura")
-
-                # Validación de archivos AD, AR, FV por directorio
-                directorios_a_validar = directorios_a_copiar[:]
-                for dir_origen in directorios_a_validar:
-                    nombre_directorio = os.path.basename(dir_origen)
-                    archivos_presentes = set(f.lower() for _, _, files in os.walk(dir_origen) for f in files)
-                    self.log_signal.emit(f"Archivos en {dir_origen}: {archivos_presentes}")
-                    archivos_faltantes = []
-
-                    if self.opciones_copia['ad_xml'] and not any(f.startswith("ad") and f.endswith(".xml") for f in archivos_presentes):
-                        archivos_faltantes.append("ad.xml")
-                    if self.opciones_copia['ar_xml'] and not any(f.startswith("ar") and f.endswith(".xml") for f in archivos_presentes):
-                        archivos_faltantes.append("ar.xml")
-                    if self.opciones_copia['fv_pdf'] and not any(f.startswith("fv") and f.endswith(".pdf") for f in archivos_presentes):
-                        archivos_faltantes.append("fv.pdf")
-                    if self.opciones_copia['fv_xml'] and not any(f.startswith("fv") and f.endswith(".xml") for f in archivos_presentes):
-                        archivos_faltantes.append("fv.xml")
-
-                    if archivos_faltantes:
-                        mensaje_archivos = f"No se encontraron los siguientes archivos en el directorio '{nombre_directorio}': {', '.join(archivos_faltantes)}. ¿Desea copiar los demás archivos?"
-                        self.respuesta_usuario = None
-                        self.pregunta_signal.emit(mensaje_archivos, QMessageBox.Yes | QMessageBox.No)
-                        while self.respuesta_usuario is None and not self.cancelar_flag:
-                            time.sleep(0.1)
-                        if self.respuesta_usuario == QMessageBox.No:
-                            directorios_a_copiar.remove(dir_origen)
-                            directorios_problematicos_archivos.add(dir_origen)
-                            error_msg = f"- '{nombre_directorio}': Faltan los archivos {', '.join(archivos_faltantes)} (omitido por usuario)"
-                            self.todos_los_errores.append(error_msg)
-                            self.log_signal.emit(f"Directorio {nombre_directorio} omitido por falta de archivos")
-                        else:
-                            error_msg = f"- '{nombre_directorio}': Faltan los archivos {', '.join(archivos_faltantes)} (copiado resto por usuario)"
-                            self.todos_los_errores.append(error_msg)
-                            self.log_signal.emit(f"Directorio {nombre_directorio} copiado a pesar de falta de archivos")
-
-                directorios_a_copiar_final = set(directorios_a_copiar)
-                self.log_signal.emit(f"Directorios a copiar tras validaciones: {directorios_a_copiar_final}")
+            self.preparar_conteo_archivos(self.directorios_a_copiar)
 
             # Renombrado y copia de directorios
             directorios_con_renombrado = {}
-            for dir_origen in directorios_a_copiar_final:
+            for dir_origen in self.directorios_a_copiar:
                 dir_name = os.path.basename(dir_origen)
                 nuevo_nombre_dir = dir_name
                 if self.opciones_copia['renombrar_directorios']:
@@ -266,12 +167,14 @@ class WorkerCopia(QThread):
                     dir_destino = os.path.join(self.directorio_destino, nuevo_nombre_dir)
                 directorios_con_renombrado[dir_origen] = dir_destino
 
-            self.validacion_autorizaciones = {}
+            self.archivos_copiados = 0
             for dir_origen, dir_destino in directorios_con_renombrado.items():
+                if self.cancelar_flag:
+                    break
                 if self.comprimir_zip:
                     temp_dir = tempfile.mkdtemp()
-                    archivos_copiados = self.copiar_archivos(dir_origen, temp_dir, self.copiar_todo, self.opciones_copia, self.copiar_en_raiz)
-                    if archivos_copiados:
+                    archivos_copiados_en_zip = self.copiar_archivos(dir_origen, temp_dir, self.copiar_todo, self.opciones_copia, self.copiar_en_raiz)
+                    if archivos_copiados_en_zip > 0:
                         zip_name = os.path.basename(dir_origen)
                         if self.opciones_copia['renombrar_zip']:
                             prefijo = self.texto_reemplazo_zip if self.texto_reemplazo_zip else ""
@@ -282,13 +185,17 @@ class WorkerCopia(QThread):
                         shutil.make_archive(zip_path[:-4], 'zip', temp_dir)
                     shutil.rmtree(temp_dir)
                 else:
-                    archivos_copiados = self.copiar_archivos(dir_origen, dir_destino, self.copiar_todo, self.opciones_copia, self.copiar_en_raiz)
+                    archivos_copiados_en_directorio = self.copiar_archivos(dir_origen, dir_destino, self.copiar_todo, self.opciones_copia, self.copiar_en_raiz)
                     if not hasattr(self, 'directorios_copiados'):
                         self.directorios_copiados = {}
-                    self.directorios_copiados[dir_origen] = archivos_copiados
+                    self.directorios_copiados[dir_origen] = archivos_copiados_en_directorio
+                    self.archivos_copiados += archivos_copiados_en_directorio
 
                 if self.aut_compensar and os.path.basename(dir_origen) in self.validacion_autorizaciones:
                     self.todos_los_errores.extend(self.validacion_autorizaciones[os.path.basename(dir_origen)])
+
+                progreso = int((self.archivos_copiados / self.total_archivos) * 100) if self.total_archivos > 0 else 0
+                self.progreso_signal.emit(progreso)
 
             if self.todos_los_errores and not self.copiar_todo:
                 mensaje_descarga = "Se encontraron los siguientes problemas:\n" + "\n".join(self.todos_los_errores) + "\n\n¿Desea descargar el archivo con todos los errores?"
@@ -307,9 +214,87 @@ class WorkerCopia(QThread):
             self.log_signal.emit(f"Copia finalizada en {time.time() - self.tiempo_inicio:.2f} segundos.")
             self.finalizado_signal.emit()
         except Exception as e:
-            self.error_signal.emit(f"Error durante la copia: {str(e)}")
+            self.error_signal.emit(f"Error durante la ejecución principal: {str(e)}")
             self.finalizado_signal.emit()
 
+    def buscar_archivos(self):
+        self.mensaje.emit("Buscando archivos en los directorios de origen...")
+        for directorio_origen in self.directorios_origen:
+            if self.detener_copia:
+                break
+            self.mensaje.emit(f"Buscando en: {directorio_origen}")
+            try:
+                for nombre_archivo in os.listdir(directorio_origen):
+                    if nombre_archivo.startswith("ResultadosDoker_") and nombre_archivo.endswith(".json"):
+                        self.archivos_encontrados.append(os.path.join(directorio_origen, nombre_archivo))
+            except Exception as e:
+                self.mensaje.emit(f"Error al acceder a {directorio_origen}: {e}")
+        self.mensaje.emit(f"Se encontraron {len(self.archivos_encontrados)} archivos para validar.")
+
+    def validar_archivos(self):
+        
+        self.mensaje.emit("Validando directorios y archivos...")
+        directorios_rips_invalidos = set()
+        directorios_docker_invalidos = set()
+        directorios_otros_invalidos = set()
+        directorios_a_copiar_temp = set()
+
+        directorios_procesados = set() # Para evitar procesar el mismo directorio varias veces
+
+        for archivo_path in self.archivos_encontrados:
+            if self.detener_copia:
+                break
+            directorio_origen = os.path.dirname(archivo_path)
+            if directorio_origen in directorios_procesados:
+                continue
+            directorios_procesados.add(directorio_origen)
+
+            valido = True
+
+            # Validación de RIPS
+            rips_path = os.path.join(directorio_origen, "RIPS")
+            if not os.path.isdir(rips_path):
+                directorios_rips_invalidos.add(directorio_origen)
+                valido = False
+
+            # Validación de Docker
+            try:
+                with open(archivo_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if data.get("ResultState") != "OK":
+                        directorios_docker_invalidos.add(directorio_origen)
+                        valido = False
+            except Exception as e:
+                self.mensaje.emit(f"Error al leer o validar {archivo_path}: {e}")
+                directorios_docker_invalidos.add(directorio_origen)
+                valido = False
+
+            # Aquí podrías añadir otras validaciones para el directorio 'directorio_origen'
+            # ...
+
+            if valido:
+                directorios_a_copiar_temp.add(directorio_origen)
+
+        # Preguntar al usuario sobre los directorios problemáticos (después de la validación)
+        directorios_a_considerar = set(self.directorios_origen) # Considerar todos los directorios origen
+
+        if directorios_rips_invalidos:
+            mensaje_rips = f"Se encontraron directorios sin la carpeta 'RIPS':\n{chr(10).join(directorios_rips_invalidos)}\n¿Desea intentar copiar estos directorios?"
+            dialogo_rips = ResizableMessageDialog("Advertencia: Carpetas sin RIPS", mensaje_rips, parent=self.parent())
+            if dialogo_rips.exec_() == QDialog.Accepted:
+                directorios_a_considerar.update(directorios_rips_invalidos)
+
+        if directorios_docker_invalidos:
+            mensaje_docker = f"Se encontraron directorios con archivos Docker no 'OK':\n{chr(10).join(directorios_docker_invalidos)}\n¿Desea intentar copiar estos directorios?"
+            dialogo_docker = ResizableMessageDialog("Advertencia: Resultados Docker no OK", mensaje_docker, parent=self.parent())
+            if dialogo_docker.exec_() == QDialog.Accepted:
+                directorios_a_considerar.update(directorios_docker_invalidos)
+
+        # Finalmente, actualiza la lista de directorios a copiar basándote en los directorios originales
+        # que pasaron las validaciones o fueron aprobados por el usuario.
+        self.directorios_a_copiar = directorios_a_considerar.intersection(directorios_a_copiar_temp.union(directorios_rips_invalidos, directorios_docker_invalidos))
+
+        self.mensaje.emit(f"Se encontraron {len(self.directorios_a_copiar)} directorios para copiar.")
     def calcular_ruta_destino(self, ruta_origen, dir_origen, nombre_directorio):
         file = os.path.basename(ruta_origen)
         ruta_relativa = os.path.relpath(ruta_origen, dir_origen)
