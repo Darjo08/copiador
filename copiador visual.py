@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QProgressBar, QTextEdit, QListWidget,
     QListWidgetItem, QMessageBox, QLineEdit,
     QGroupBox, QScrollArea, QWidget, QVBoxLayout,
-    QDialog, QHBoxLayout, QFormLayout, QGridLayout,
+    QDialog, QHBoxLayout, QFormLayout, QGridLayout,QProgressDialog,
 )
 from PyQt5.QtGui import QIcon, QCursor
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMimeData, QSettings
@@ -86,6 +86,7 @@ class WorkerCopia(QThread):
         self.todos_los_errores = []
         self.validacion_autorizaciones = {}
         self.respuesta_pregunta = {}
+        
 
     def find_all_keys_with_context(self, obj, target, context=None, results=None, path=None):
         if results is None:
@@ -135,6 +136,7 @@ class WorkerCopia(QThread):
                 directorios_problematicos_rips = set()
                 directorios_problematicos_docker = set()
                 directorios_problematicos_archivos = set()
+                problemas_docker = []  # Acumula problemas de ResultState y existencia de archivos Docker
 
                 # Validación de RIPS
                 for dir_origen in self.directorios_origen:
@@ -158,7 +160,7 @@ class WorkerCopia(QThread):
                         self.log_signal.emit(f"Directorios omitidos por RIPS: {directorios_problematicos_rips}")
                     self.todos_los_errores.extend(problemas_rips)
 
-                # Validación de ResultState en Docker por directorio
+                # Validación de ResultState y existencia de archivos Docker
                 directorios_a_validar = directorios_a_copiar[:]
                 for dir_origen in directorios_a_validar:
                     nombre_directorio = os.path.basename(dir_origen)
@@ -169,10 +171,18 @@ class WorkerCopia(QThread):
                         if file.startswith("ResultadosDoker_") and file.endswith(".json")
                     ]
                     self.log_signal.emit(f"Archivos Docker en {dir_origen}: {docker_files}")
-                    result_state_encontrado = False
-                    if not docker_files:
-                        continue  # Si no hay archivos Docker, no validamos ResultState
 
+                    # Nueva validación: si 'rips_docker' está activado y no hay archivos Docker
+                    if self.opciones_copia['rips_docker'] and not docker_files:
+                        error_msg = f"- '{nombre_directorio}': No se encontró ningún archivo 'ResultadosDoker_*.json'"
+                        problemas_docker.append(error_msg)
+                        directorios_problematicos_docker.add(dir_origen)
+                        self.todos_los_errores.append(error_msg)
+                        self.log_signal.emit(f"Directorio {nombre_directorio} agregado a problemas de Docker por falta de archivo")
+                        continue  # Saltar a la siguiente iteración si no hay archivos
+
+                    # Validación de ResultState (solo si hay archivos Docker)
+                    result_state_encontrado = False
                     for ruta_docker in docker_files:
                         data = None
                         for encoding in ['utf-8', 'latin-1', 'windows-1252']:
@@ -196,22 +206,25 @@ class WorkerCopia(QThread):
                             self.log_signal.emit(f"{ruta_docker} tiene ResultState: true")
                             break
 
-                    if not result_state_encontrado:
-                        mensaje_docker = f"El directorio '{nombre_directorio}' tiene ResultState false, no tiene ResultState o no se pudo leer ningún archivo Docker. ¿Desea copiar este directorio?"
-                        self.respuesta_usuario = None
-                        self.pregunta_signal.emit(mensaje_docker, QMessageBox.Yes | QMessageBox.No)
-                        while self.respuesta_usuario is None and not self.cancelar_flag:
-                            time.sleep(0.1)
-                        if self.respuesta_usuario == QMessageBox.No:
-                            directorios_a_copiar.remove(dir_origen)
-                            directorios_problematicos_docker.add(dir_origen)
-                            error_msg = f"- '{nombre_directorio}': No se encontró un archivo ResultadosDoker válido con 'ResultState: true' (omitido por usuario)"
-                            self.todos_los_errores.append(error_msg)
-                            self.log_signal.emit(f"Directorio {nombre_directorio} omitido por ResultState o error de lectura")
-                        else:
-                            error_msg = f"- '{nombre_directorio}': No se encontró un archivo ResultadosDoker válido con 'ResultState: true' (copiado por usuario)"
-                            self.todos_los_errores.append(error_msg)
-                            self.log_signal.emit(f"Directorio {nombre_directorio} copiado a pesar de ResultState o error de lectura")
+                    if not result_state_encontrado and docker_files:  # Solo si hay archivos pero no ResultState válido
+                        error_msg = f"- '{nombre_directorio}': Tiene ResultState false, no tiene ResultState o no se pudo leer ningún archivo Docker"
+                        problemas_docker.append(error_msg)
+                        directorios_problematicos_docker.add(dir_origen)
+                        self.todos_los_errores.append(error_msg)
+                        self.log_signal.emit(f"Directorio {nombre_directorio} agregado a problemas de Docker por ResultState")
+
+                # Pregunta consolidada para problemas de Docker
+                if problemas_docker:
+                    mensaje_docker = "Los siguientes directorios tienen problemas con archivos Docker:\n" + "\n".join(problemas_docker) + "\n\n¿Desea copiar estos directorios?"
+                    self.respuesta_usuario = None
+                    self.pregunta_signal.emit(mensaje_docker, QMessageBox.Yes | QMessageBox.No)
+                    while self.respuesta_usuario is None and not self.cancelar_flag:
+                        time.sleep(0.1)
+                    if self.respuesta_usuario == QMessageBox.No:
+                        directorios_a_copiar = [d for d in directorios_a_copiar if d not in directorios_problematicos_docker]
+                        self.log_signal.emit(f"Directorios omitidos por Docker: {directorios_problematicos_docker}")
+                    else:
+                        self.log_signal.emit("Usuario eligió copiar directorios con problemas de Docker")
 
                 # Validación de archivos AD, AR, FV por directorio
                 directorios_a_validar = directorios_a_copiar[:]
@@ -590,13 +603,90 @@ class WorkerCopia(QThread):
 
         return debe_copiar, tipo_archivo
 
+class CacheWorker(QThread):
+    progreso_signal = pyqtSignal(int)  # Para actualizar la barra de progreso
+    finalizado_signal = pyqtSignal(dict)  # Para enviar el caché completo
+    error_signal = pyqtSignal(str)  # Para manejar errores
+
+    def __init__(self, directorio_origen, restringir_busqueda, anio, meses):
+        super().__init__()
+        self.directorio_origen = directorio_origen
+        self.restringir_busqueda = restringir_busqueda
+        self.anio = anio
+        self.meses = meses
+
+    def run(self):
+        try:
+            cache = {}
+            if self.restringir_busqueda:
+                print("Cacheando directorios restringidos por año y meses...")
+                meses_lista = [m.strip() for m in self.meses.split(',') if m.strip()]
+                total_carpetas = 0
+                subdirectorios_totales = []
+
+                if not self.anio.isdigit() or len(self.anio) != 4:
+                    self.error_signal.emit(f"Error: El año '{self.anio}' no es válido. Usando '2025' por defecto.")
+                    self.anio = "2025"
+
+                # Primero contamos el total de subdirectorios para un progreso preciso
+                for mes in meses_lista:
+                    if not (len(mes) == 2 and mes.isdigit() and 1 <= int(mes) <= 12):
+                        self.error_signal.emit(f"Error: El mes '{mes}' no es válido. Ignorando...")
+                        continue
+                    carpeta_mes = f"{self.anio}{mes}"
+                    ruta_carpeta = os.path.join(self.directorio_origen, carpeta_mes)
+                    if os.path.isdir(ruta_carpeta):
+                        ruta_facturas_salud = os.path.join(ruta_carpeta, 'FACTURAS_SALUD')
+                        if os.path.isdir(ruta_facturas_salud):
+                            subdirectorios = [d for d in os.listdir(ruta_facturas_salud) if os.path.isdir(os.path.join(ruta_facturas_salud, d))]
+                            subdirectorios_totales.extend([(mes, d) for d in subdirectorios])
+                            total_carpetas += len(subdirectorios)
+
+                progreso = 0
+                for mes, dir_name in subdirectorios_totales:
+                    carpeta_mes = f"{self.anio}{mes}"
+                    ruta_facturas_salud = os.path.join(self.directorio_origen, carpeta_mes, 'FACTURAS_SALUD')
+                    ruta_completa = os.path.join(ruta_facturas_salud, dir_name)
+                    clave_cache = f"{carpeta_mes}_{dir_name}"
+                    cache[clave_cache] = ruta_completa
+                    progreso += 1
+                    porcentaje = min(int((progreso / total_carpetas) * 100), 100) if total_carpetas > 0 else 100
+                    self.progreso_signal.emit(porcentaje)
+                    print(f"Cacheado: {ruta_completa} (Año: {self.anio}, Mes: {mes})")
+
+            else:
+                print("Cacheando solo los directorios en la raíz del directorio de origen...")
+                items = os.listdir(self.directorio_origen)
+                total_items = len([i for i in items if os.path.isdir(os.path.join(self.directorio_origen, i))])
+                progreso = 0
+
+                for item in items:
+                    ruta_completa = os.path.join(self.directorio_origen, item)
+                    if os.path.isdir(ruta_completa):
+                        cache[item] = ruta_completa
+                        progreso += 1
+                        porcentaje = min(int((progreso / total_items) * 100), 100) if total_items > 0 else 100
+                        self.progreso_signal.emit(porcentaje)
+                        print(f"Cacheado (raíz): {ruta_completa}")
+
+            # Asegurar que el progreso llegue al 100% antes de finalizar
+            self.progreso_signal.emit(100)
+            self.finalizado_signal.emit(cache)
+        except Exception as e:
+            self.error_signal.emit(f"Error al cargar el caché: {str(e)}")
+            
 class CopiadorDirectorios(QMainWindow):
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Copiador de Directorios")
         self.setMinimumSize(950, 950)  # Tamaño mínimo para la ventana
-        self.setWindowIcon(QIcon(resource_path("iconos_2/kurama.png")))
+        self.setWindowIcon(QIcon(resource_path("icons/kurama.png")))
         self.settings = QSettings("MiEmpresa", "CopiadorDirectorios")
+
+        self.directorios_cache = {}
+        self.directorio_origen_cacheado = None
+        self.cache_worker = None
 
         # Widget central y layout principal
         central_widget = QWidget(self)
@@ -614,7 +704,7 @@ class CopiadorDirectorios(QMainWindow):
         self.origen_input.textChanged.connect(self.actualizar_origen)
         self.boton_origen = QPushButton("Sel.")  # Botón más pequeño
         self.boton_origen.setFixedWidth(50)  # Reducir ancho del botón
-        self.boton_origen.setIcon(QIcon(resource_path("iconos_2/carpeta.png")))
+        self.boton_origen.setIcon(QIcon(resource_path("icons/carpeta.png")))
         self.boton_origen.clicked.connect(self.seleccionar_origen)
         origen_row = QHBoxLayout()
         origen_row.addWidget(QLabel("Origen:"))
@@ -626,7 +716,7 @@ class CopiadorDirectorios(QMainWindow):
         self.destino_input.textChanged.connect(self.actualizar_destino)
         self.boton_destino = QPushButton("Sel.")  # Botón más pequeño
         self.boton_destino.setFixedWidth(50)  # Reducir ancho del botón
-        self.boton_destino.setIcon(QIcon(resource_path("iconos_2/carpeta.png")))
+        self.boton_destino.setIcon(QIcon(resource_path("icons/carpeta.png")))
         self.boton_destino.clicked.connect(self.seleccionar_destino)
         destino_row = QHBoxLayout()
         destino_row.addWidget(QLabel("Destino:"))
@@ -641,9 +731,19 @@ class CopiadorDirectorios(QMainWindow):
         # Columna derecha: Opciones adicionales (más grande y reorganizada)
         extra_options_group = QGroupBox("Opciones Adicionales")
         extra_options_layout = QGridLayout()  # Cambiar a QGridLayout para mejor organización
-        extra_options_group.setLayout(extra_options_layout)
+        extra_options_group.setLayout(extra_options_layout) 
         
-        self.check_2025 = QCheckBox("Restringir 2025")
+        # Nueva sección para configurar año y meses
+        self.check_restringir_busqueda = QCheckBox("Restringir Búsqueda")
+        self.anio_input = QLineEdit("2025")
+        self.anio_input.setPlaceholderText("Año (ej. 2025)")
+        self.anio_input.setEnabled(False)
+        self.meses_input = QLineEdit("02,03")
+        self.meses_input.setPlaceholderText("Meses (ej. 02,03)")
+        self.meses_input.setEnabled(False)
+        self.boton_cargar_cache = QPushButton("Cargar Caché")
+        self.boton_cargar_cache.clicked.connect(self.cargar_cache_manual)
+
         self.check_txt_rips = QCheckBox("txt Rips")
         self.check_txt_docker = QCheckBox("txt Docker")
         self.check_tema_oscuro = QCheckBox("Tema Claro")
@@ -655,18 +755,23 @@ class CopiadorDirectorios(QMainWindow):
         self.check_copiar_sin_validar = QCheckBox("Sin validar")
 
         # Reorganizar checkboxes en una cuadrícula 3x3
-        extra_options_layout.addWidget(self.check_2025, 0, 0)
-        extra_options_layout.addWidget(self.check_txt_rips, 0, 1)
-        extra_options_layout.addWidget(self.check_txt_docker, 0, 2)
-        extra_options_layout.addWidget(self.check_tema_oscuro, 1, 0)
-        extra_options_layout.addWidget(self.check_activar_Copiarenraiz, 1, 1)
-        extra_options_layout.addWidget(self.check_formato_json, 1, 2)
+        extra_options_layout.addWidget(self.check_restringir_busqueda, 0, 0)
+        extra_options_layout.addWidget(QLabel("Año:"), 0, 1)
+        extra_options_layout.addWidget(self.anio_input, 0, 2)
+        extra_options_layout.addWidget(QLabel("Meses:"), 0, 3)
+        extra_options_layout.addWidget(self.meses_input, 0, 4)
+        extra_options_layout.addWidget(self.boton_cargar_cache, 0, 5)  # Botón en la misma fila
+        extra_options_layout.addWidget(self.check_txt_rips, 1, 0)
+        extra_options_layout.addWidget(self.check_txt_docker, 1, 1)
+        extra_options_layout.addWidget(self.check_tema_oscuro, 1, 2)
+        extra_options_layout.addWidget(self.check_activar_Copiarenraiz, 1, 3)
+        extra_options_layout.addWidget(self.check_formato_json, 1, 4)
         extra_options_layout.addWidget(self.check_comprimir_zip, 2, 0)
         extra_options_layout.addWidget(self.check_aut_compensar, 2, 1)
         extra_options_layout.addWidget(self.check_copiar_sin_validar, 2, 2)
 
         top_section_layout.addWidget(extra_options_group)
-        top_section_layout.setStretch(1, 2)  # Columna derecha ocupa 2/3 del espacio
+        top_section_layout.setStretch(1, 2) # Columna derecha ocupa 2/3 del espacio
 
         # Sección de opciones de copia (checkboxes de archivos)
         file_options_group = QGroupBox("Opciones de Copia")
@@ -765,10 +870,10 @@ class CopiadorDirectorios(QMainWindow):
 
         list_buttons_layout = QHBoxLayout()
         self.boton_agregar_listado = QPushButton("Agregar Listado (TXT/Excel)")
-        self.boton_agregar_listado.setIcon(QIcon(resource_path("iconos_2/nota.png")))
+        self.boton_agregar_listado.setIcon(QIcon(resource_path("icons/nota.png")))
         self.boton_agregar_listado.clicked.connect(self.agregar_listado)
         self.boton_eliminar_listado = QPushButton("Eliminar Listado")
-        self.boton_eliminar_listado.setIcon(QIcon(resource_path("iconos_2/eliminar.png")))
+        self.boton_eliminar_listado.setIcon(QIcon(resource_path("icons/eliminar.png")))
         self.boton_eliminar_listado.clicked.connect(self.eliminar_listado)
         list_buttons_layout.addWidget(self.boton_agregar_listado)
         list_buttons_layout.addWidget(self.boton_eliminar_listado)
@@ -784,7 +889,7 @@ class CopiadorDirectorios(QMainWindow):
         self.label_contador_manual = QLabel("Directorios: 0")
         self.label_contador_manual.setAlignment(Qt.AlignRight | Qt.AlignBottom)
         self.boton_agregar_manual = QPushButton("Agregar Manualmente")
-        self.boton_agregar_manual.setIcon(QIcon(resource_path("iconos_2/editar.png")))
+        self.boton_agregar_manual.setIcon(QIcon(resource_path("icons/editar.png")))
         self.boton_agregar_manual.clicked.connect(self.agregar_listado_manual)
         manual_layout.addWidget(self.label_entrada_manual)
         manual_layout.addWidget(self.manual_input_text)
@@ -811,11 +916,11 @@ class CopiadorDirectorios(QMainWindow):
         # Botones de acción
         buttons_layout = QHBoxLayout()
         self.boton_copiar = QPushButton("Copiar Directorios")
-        self.boton_copiar.setIcon(QIcon(resource_path("iconos_2/copiar.png")))
+        self.boton_copiar.setIcon(QIcon(resource_path("icons/copiar.png")))
         self.boton_copiar.clicked.connect(self.confirmar_copia)
         self.boton_copiar.setEnabled(False)
         self.boton_cancelar = QPushButton("Cancelar")
-        self.boton_cancelar.setIcon(QIcon(resource_path("iconos_2/cancelar.png")))
+        self.boton_cancelar.setIcon(QIcon(resource_path("icons/cancelar.png")))
         self.boton_cancelar.clicked.connect(self.cancelar_copia)
         self.boton_cancelar.setEnabled(False)
         buttons_layout.addStretch()
@@ -834,8 +939,9 @@ class CopiadorDirectorios(QMainWindow):
 
         # Conexiones y configuraciones iniciales
         self.check_tema_oscuro.stateChanged.connect(self.cambiar_tema)
+        self.check_restringir_busqueda.stateChanged.connect(self.toggle_restringir_busqueda)
         self.setAcceptDrops(True)
-        self.cargar_configuraciones()
+        self.cargar_configuraciones() # Asegurarnos de cargar configuraciones iniciales
         self.check_tema_oscuro.setChecked(self.settings.value("tema_oscuro", False, type=bool))
         self.cambiar_tema()
         self.worker_thread = None
@@ -846,6 +952,7 @@ class CopiadorDirectorios(QMainWindow):
         self.actualizar_estado_renombrado_zip()
         self.actualizar_estado_renombrado_directorios()
         self.actualizar_estado_comprimir()
+        self.toggle_restringir_busqueda() 
 
     def showEvent(self, event):
         self.resize(950, 950)
@@ -874,6 +981,9 @@ class CopiadorDirectorios(QMainWindow):
         self.check_copiar_fv_xml.setChecked(self.settings.value("check_fv_xml", False, type=bool))
         self.check_copiar_rips_docker.setChecked(self.settings.value("check_rips_docker", False, type=bool))
         self.check_copiar_rips_archivo.setChecked(self.settings.value("check_rips_archivo", False, type=bool))
+        self.check_restringir_busqueda.setChecked(self.settings.value("restringir_busqueda", False, type=bool))
+        self.anio_input.setText(self.settings.value("anio_restriccion", "2025", type=str))
+        self.meses_input.setText(self.settings.value("meses_restriccion", "02,03", type=str))
         self.check_activar_renombrado_rips.setChecked(self.settings.value("check_renombrado_rips", False, type=bool))
         self.check_activar_renombrado_docker.setChecked(self.settings.value("check_renombrado_docker", False, type=bool))
         self.check_activar_renombrado_zip.setChecked(self.settings.value("check_renombrado_zip", False, type=bool))
@@ -896,6 +1006,7 @@ class CopiadorDirectorios(QMainWindow):
             self.destino_input.text().strip() != "" and 
             self.lista_directorios_copiar.count() > 0
         )
+        self.toggle_restringir_busqueda()
 
     def toggle_renombrado_fields(self, checked):
         rips_enabled = checked and self.check_activar_renombrado_rips.isChecked()
@@ -918,6 +1029,22 @@ class CopiadorDirectorios(QMainWindow):
         self.input_sufijo_directorios.setEnabled(dirs_enabled)
         self.check_activar_renombrado_directorios.setEnabled(checked)
 
+    def toggle_restringir_busqueda(self):
+        """Activa o desactiva los campos Año y Meses, y habilita/deshabilita el botón Cargar Caché."""
+        estado = self.check_restringir_busqueda.isChecked()
+        print(f"Toggle restringir búsqueda: estado={estado}")
+        self.anio_input.setEnabled(estado)
+        self.meses_input.setEnabled(estado)
+        self.boton_cargar_cache.setEnabled(estado)
+
+        if not estado:
+            self.log_text.append("Opción 'Restringir Búsqueda' desactivada. Los campos Año y Meses han sido deshabilitados.")
+        else:
+            self.log_text.append("Opción 'Restringir Búsqueda' activada. Ahora puedes especificar Año y Meses y cargar la caché manualmente.")
+
+        print(f"Año habilitado: {self.anio_input.isEnabled()}, Meses habilitado: {self.meses_input.isEnabled()}, Botón Cargar Caché habilitado: {self.boton_cargar_cache.isEnabled()}")
+        self.update()
+        
     def closeEvent(self, event):
         self.settings.setValue("ruta_origen", self.origen_input.text())
         self.settings.setValue("ruta_destino", self.destino_input.text())
@@ -944,9 +1071,13 @@ class CopiadorDirectorios(QMainWindow):
         self.settings.setValue("check_aut_compensar", self.check_aut_compensar.isChecked())
         self.settings.setValue("check_copiar_sin_validar", self.check_copiar_sin_validar.isChecked())
         self.settings.setValue("tema_oscuro", self.check_tema_oscuro.isChecked())
+        self.settings.setValue("anio_restriccion", self.anio_input.text())
+        self.settings.setValue("meses_restriccion", self.meses_input.text())
+
         event.accept()
 
     def confirmar_copia(self):
+
         print("Iniciando nueva ejecución de copia...")
 
         directorios_seleccionados = []
@@ -1131,17 +1262,161 @@ class CopiadorDirectorios(QMainWindow):
         if directorio:
             self.origen_input.setText(directorio)
             print(f"Directorio de origen seleccionado: {directorio}")
+            # No cargar el caché aquí; el usuario debe usar "Cargar Caché"
 
     def seleccionar_destino(self):
         directorio = QFileDialog.getExistingDirectory(self, "Seleccionar Directorio de Destino")
         if directorio:
             self.destino_input.setText(directorio)
 
+    def cargar_cache_manual(self):
+        """Carga el caché manualmente según los parámetros actuales, solo si "Restringir Búsqueda" está activado."""
+        if not self.check_restringir_busqueda.isChecked():
+            QMessageBox.warning(self, "Advertencia", "La opción 'Restringir Búsqueda' debe estar activada para cargar el caché.")
+            return
+
+        directorio_origen = self.origen_input.text().strip()
+        if not directorio_origen or not os.path.isdir(directorio_origen):
+            QMessageBox.warning(self, "Advertencia", "Por favor, seleccione un directorio de origen válido antes de cargar el caché.")
+            return
+        print(f"Cargando caché manualmente para: {directorio_origen}")
+        self.cargar_cache_con_progreso(directorio_origen)
+
+    def actualizar_cache_directorios(self, directorio_origen):
+        """Cachea los directorios en la ruta de origen basándose en año y meses configurables."""
+        self.directorios_cache.clear()
+        self.directorio_origen_cacheado = directorio_origen
+        restringir_2025 = self.check_2025.isChecked()
+
+        if restringir_2025:
+            print("Cacheando directorios restringidos por año y meses...")
+            anio = self.anio_input.text().strip() or "2025"  # Valor por defecto si está vacío
+            meses_str = self.meses_input.text().strip() or "01,12"  # Valor por defecto si está vacío
+            meses = [m.strip() for m in meses_str.split(',') if m.strip()]  # Convertir a lista de meses
+
+            if not anio.isdigit() or len(anio) != 4:
+                self.log_text.append(f"Error: El año '{anio}' no es válido. Usando '2025' por defecto.")
+                anio = "2025"
+
+            for mes in meses:
+                if not (len(mes) == 2 and mes.isdigit() and 1 <= int(mes) <= 12):
+                    self.log_text.append(f"Error: El mes '{mes}' no es válido. Ignorando...")
+                    continue
+
+                # Formar el nombre de la carpeta (ej. "202502", "202503")
+                carpeta_mes = f"{anio}{mes}"
+                ruta_carpeta = os.path.join(directorio_origen, carpeta_mes)
+
+                if os.path.isdir(ruta_carpeta):
+                    ruta_facturas_salud = os.path.join(ruta_carpeta, 'FACTURAS_SALUD')
+                    if os.path.isdir(ruta_facturas_salud):
+                        for dir_name in os.listdir(ruta_facturas_salud):
+                            ruta_completa = os.path.join(ruta_facturas_salud, dir_name)
+                            if os.path.isdir(ruta_completa):
+                                clave_cache = f"{carpeta_mes}_{dir_name}"  # Clave única
+                                self.directorios_cache[clave_cache] = ruta_completa
+                                print(f"Cacheado: {ruta_completa} (Año: {anio}, Mes: {mes})")
+                    else:
+                        print(f"No se encontró FACTURAS_SALUD en: {ruta_carpeta}")
+                else:
+                    print(f"No se encontró la carpeta {carpeta_mes} en: {directorio_origen}")
+        else:
+            print("Cacheando solo los directorios en la raíz del directorio de origen...")
+            # Solo buscar en la raíz del directorio de origen
+            for item in os.listdir(directorio_origen):
+                ruta_completa = os.path.join(directorio_origen, item)
+                if os.path.isdir(ruta_completa):  # Solo agregar si es un directorio
+                    self.directorios_cache[item] = ruta_completa
+                    print(f"Cacheado (raíz): {ruta_completa}")
+
+    def cargar_cache_con_progreso(self, directorio_origen):
+        """Carga el caché con una barra de progreso, solo si "Restringir Búsqueda" está activado."""
+        if not self.check_restringir_busqueda.isChecked():
+            self.log_text.append("No se cargó el caché porque 'Restringir Búsqueda' está desactivado.")
+            return
+
+        if self.cache_worker and self.cache_worker.isRunning():
+            self.cache_worker.quit()
+            self.cache_worker.wait()
+
+        progress_dialog = QProgressDialog("Cargando caché...", "Cancelar", 0, 100, self)
+        progress_dialog.setWindowTitle("Progreso de Caché")
+        progress_dialog.setWindowModality(Qt.WindowModal)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setValue(0)
+
+        self.cache_worker = CacheWorker(
+            directorio_origen,
+            self.check_restringir_busqueda.isChecked(),
+            self.anio_input.text().strip() or "2025",
+            self.meses_input.text().strip() or "01,12"
+        )
+
+        self.cache_worker.progreso_signal.connect(progress_dialog.setValue)
+        self.cache_worker.finalizado_signal.connect(lambda cache: self.on_cache_finalizado(cache, progress_dialog))
+        self.cache_worker.error_signal.connect(lambda msg: self.on_cache_error(msg, progress_dialog))
+        progress_dialog.canceled.connect(self.cancelar_cacheo)
+
+        self.cache_worker.start()
+        progress_dialog.exec_()
+
+    def on_cache_finalizado(self, cache, progress_dialog):
+        """Maneja la finalización del cacheo."""
+        self.directorios_cache = cache
+        self.directorio_origen_cacheado = self.origen_input.text().strip()
+        print(f"Caché cargado con {len(self.directorios_cache)} directorios.")
+        self.log_text.append(f"Caché cargado para {self.directorio_origen_cacheado} con {len(self.directorios_cache)} directorios.")
+        progress_dialog.setValue(100)  # Asegurar que llegue al 100%
+        progress_dialog.close()  # Cerrar manualmente
+
+    def on_cache_error(self, mensaje, progress_dialog):
+        """Maneja errores durante el cacheo."""
+        QMessageBox.critical(self, "Error", mensaje)
+        self.directorios_cache.clear()
+        self.directorio_origen_cacheado = None
+        self.log_text.append(f"Error al cargar caché: {mensaje}")
+        progress_dialog.close()
+
+    def cancelar_cacheo(self):
+        """Cancela el proceso de cacheo si el usuario presiona Cancelar."""
+        if self.cache_worker and self.cache_worker.isRunning():
+            self.cache_worker.quit()
+            self.cache_worker.wait()
+            self.directorios_cache.clear()
+            self.directorio_origen_cacheado = None
+            self.log_text.append("Carga del caché cancelada por el usuario.")
+
+    def buscar_directorio_en_cache(self, nombre_directorio):
+        """Busca un directorio por su nombre, ya sea en la caché (si "Restringir Búsqueda" está activado) o directamente en la raíz del directorio de origen."""
+        directorio_origen = self.origen_input.text().strip()
+
+        if not directorio_origen or not os.path.isdir(directorio_origen):
+            return None
+
+        if self.check_restringir_busqueda.isChecked():
+            # Buscar en la caché si "Restringir Búsqueda" está activado
+            if not self.directorios_cache:  # Asegúrate de que la caché exista
+                return None
+            anio = self.anio_input.text().strip() or "2025"
+            meses_str = self.meses_input.text().strip() or "01,12"
+            meses = [m.strip() for m in meses_str.split(',') if m.strip()]
+            for mes in meses:
+                clave = f"{anio}{mes}_{nombre_directorio}"
+                if clave in self.directorios_cache:
+                    return self.directorios_cache[clave]
+            return None
+        else:
+            # Si "Restringir Búsqueda" está desactivado, buscar directamente en la raíz del directorio de origen
+            ruta_completa = os.path.join(directorio_origen, nombre_directorio)
+            if os.path.isdir(ruta_completa):
+                return ruta_completa
+            return None
+
     def actualizar_origen(self, texto):
         self.settings.setValue("ruta_origen", texto)
         self.boton_copiar.setEnabled(
-            self.origen_input.text() != "Directorio de Origen:" and 
-            self.destino_input.text() != "Directorio de Destino:" and 
+            self.origen_input.text().strip() != "" and 
+            self.destino_input.text().strip() != "" and 
             self.lista_directorios_copiar.count() > 0
         )
         print(f"Ruta de origen actualizada: {texto}")
@@ -1185,14 +1460,53 @@ class CopiadorDirectorios(QMainWindow):
     def agregar_listado(self):
         archivo, _ = QFileDialog.getOpenFileName(self, "Seleccionar Archivo de Listado", "", "Archivos de Listado (*.txt *.xlsx *.xls);;Text Files (*.txt);;Excel Files (*.xlsx *.xls);;All Files (*)")
         if archivo:
-            self.procesar_archivo_listado(archivo)
-            self.boton_copiar.setEnabled(True)
+            directorio_origen = self.origen_input.text().strip()
+            if not directorio_origen:
+                QMessageBox.warning(self, "Advertencia", "Primero seleccione un directorio de origen.")
+                return
+
+            extension = os.path.splitext(archivo)[1].lower()
+            directorios = []
+            directorios_no_validos = []
+
+            if extension == '.txt':
+                with open(archivo, 'r', encoding='utf-8') as f:
+                    directorios = [linea.strip() for linea in f.readlines() if linea.strip()]
+            elif extension in ['.xlsx', '.xls']:
+                wb = openpyxl.load_workbook(archivo)
+                ws = wb.active
+                directorios = [str(cell.value).strip() for cell in ws['A'] if cell.value and str(cell.value).strip()]
+                wb.close()
+
+            if not directorios:
+                QMessageBox.warning(self, "Advertencia", "El archivo seleccionado no contiene directorios válidos.")
+                return
+
+            directorios_validos_contar = 0
+            for directorio in directorios:
+                ruta_completa = self.buscar_directorio_en_cache(directorio)  # Usa el nuevo método
+                if ruta_completa:
+                    item = QListWidgetItem(directorio)
+                    item.setData(Qt.UserRole, ruta_completa)
+                    if item.text() not in [self.lista_directorios_copiar.item(i).text() for i in range(self.lista_directorios_copiar.count())]:
+                        self.lista_directorios_copiar.addItem(item)
+                        item.setSelected(True)
+                        directorios_validos_contar += 1
+                else:
+                    directorios_no_validos.append(directorio)
+
+            self.log_text.append(f"Directorios válidos agregados y seleccionados desde archivo: {directorios_validos_contar}")
+            if directorios_no_validos:
+                mensaje = f"Se agregaron {directorios_validos_contar} directorios válidos.\n\nLos siguientes directorios no se encontraron:\n" + "\n".join(f"- {d}" for d in directorios_no_validos)
+                QMessageBox.information(self, "Resultado de Carga de Archivo", mensaje)
+
+            self.boton_copiar.setEnabled(self.destino_input.text().strip() != "" and self.lista_directorios_copiar.count() > 0)
 
     def agregar_listado_manual(self):
         directorio_origen = self.origen_input.text().strip()
         if not directorio_origen:
-            QMessageBox.warning(self, "Advertencia", "Primero seleccione el directorio de origen.")
-            print("Advertencia: No se ha seleccionado directorio de origen.")
+            QMessageBox.warning(self, "Advertencia", "Primero seleccione un directorio de origen.")
+            print("Advertencia: No se ha seleccionado un directorio de origen.")
             return
 
         print("Iniciando agregar_listado_manual...")
@@ -1200,67 +1514,38 @@ class CopiadorDirectorios(QMainWindow):
         directorios_manuales = self.manual_input_text.toPlainText().strip().splitlines()
         directorios_validos_contar = 0
 
-        restringir_2025 = self.check_2025.isChecked()
-        directorios_encontrados = {}
-
-        if restringir_2025:
-            print("Búsqueda restringida a carpetas '2025*/FACTURAS_SALUD'...")
-            for carpeta in os.listdir(directorio_origen):
-                if carpeta.startswith('2025'):
-                    ruta_2025 = os.path.join(directorio_origen, carpeta)
-                    if os.path.isdir(ruta_2025):
-                        ruta_facturas_salud = os.path.join(ruta_2025, 'FACTURAS_SALUD')
-                        if os.path.isdir(ruta_facturas_salud):
-                            print(f"Explorando: {ruta_facturas_salud}")
-                            for dir_name in os.listdir(ruta_facturas_salud):
-                                ruta_completa = os.path.join(ruta_facturas_salud, dir_name)
-                                if os.path.isdir(ruta_completa):
-                                    directorios_encontrados[dir_name] = ruta_completa
-                                    print(f"Encontrado: {ruta_completa}")
-                        else:
-                            print(f"No se encontró FACTURAS_SALUD en: {ruta_2025}")
-                    else:
-                        print(f"No es un directorio: {ruta_2025}")
-        else:
-            print("Buscando en todas las subcarpetas del directorio de origen...")
-            for root, dirs, _ in os.walk(directorio_origen):
-                for dir_name in dirs:
-                    ruta_completa = os.path.join(root, dir_name)
-                    directorios_encontrados[dir_name] = ruta_completa
-                    print(f"Encontrado: {ruta_completa}")
-
         for directorio in directorios_manuales:
             directorio = directorio.strip()
             if not directorio:
                 continue
 
-            if directorio in directorios_encontrados:
+            ruta_completa = self.buscar_directorio_en_cache(directorio)  # Usa el nuevo método
+            if ruta_completa:
                 item = QListWidgetItem(directorio)
-                item.setData(Qt.UserRole, directorios_encontrados[directorio])
+                item.setData(Qt.UserRole, ruta_completa)
                 if item.text() not in [self.lista_directorios_copiar.item(i).text() for i in range(self.lista_directorios_copiar.count())]:
                     self.lista_directorios_copiar.addItem(item)
-                    item.setSelected(True)  # Seleccionar automáticamente el ítem
+                    item.setSelected(True)
                     directorios_validos_contar += 1
-                    print(f"Agregado y seleccionado: {directorio} ({directorios_encontrados[directorio]})")
+                    print(f"Agregado y seleccionado: {directorio} ({ruta_completa})")
             else:
                 directorios_no_validos.append(directorio)
-                print(f"No encontrado: {directorio}")
+                print(f"No encontrado en caché o raíz: {directorio}")
 
         self.boton_copiar.setEnabled(self.destino_input.text().strip() != "" and self.lista_directorios_copiar.count() > 0)
         self.log_text.append(f"Directorios válidos agregados y seleccionados: {directorios_validos_contar}")
 
         if directorios_no_validos:
             mensaje = (f"Se agregaron {directorios_validos_contar} directorios válidos.\n\n"
-                       "Los siguientes directorios no se encontraron en la ruta de origen:\n" +
-                       "\n".join(f"- {d}" for d in directorios_no_validos) +
-                       "\n\n¿Desea continuar con los directorios encontrados?")
+                    "Los siguientes directorios no se encontraron en el caché o raíz:\n" +
+                    "\n".join(f"- {d}" for d in directorios_no_validos) +
+                    "\n\n¿Desea continuar con los directorios encontrados?")
             dialogo = ResizableMessageDialog("Directorios No Encontrados", mensaje, self)
             resultado = dialogo.exec_()
             if resultado == QDialog.Accepted:
                 self.log_text.append("Usuario eligió continuar con los directorios encontrados.")
             else:
                 self.log_text.append("Usuario canceló la operación debido a directorios no encontrados.")
-                # Limpiar los directorios agregados si el usuario no quiere continuar
                 for i in range(self.lista_directorios_copiar.count() - 1, -1, -1):
                     item = self.lista_directorios_copiar.item(i)
                     if item.text() in [d for d in directorios_manuales if d.strip()]:
@@ -1273,7 +1558,10 @@ class CopiadorDirectorios(QMainWindow):
     def procesar_archivo_listado(self, archivo):
         directorio_origen = self.origen_input.text().strip()
         if not directorio_origen:
-            QMessageBox.warning(self, "Advertencia", "Primero seleccione el directorio de origen.")
+            QMessageBox.warning(self, "Advertencia", "Primero seleccione un directorio de origen.")
+            return
+        if directorio_origen != self.directorio_origen_cacheado:
+            QMessageBox.warning(self, "Advertencia", "El caché no está actualizado para este directorio. Haga clic en 'Cargar Caché' primero.")
             return
 
         extension = os.path.splitext(archivo)[1].lower()
@@ -1293,34 +1581,15 @@ class CopiadorDirectorios(QMainWindow):
             QMessageBox.warning(self, "Advertencia", "El archivo seleccionado no contiene directorios válidos.")
             return
 
-        restringir_2025 = self.check_2025.isChecked()
-        directorios_encontrados = {}
-
-        if restringir_2025:
-            for carpeta in os.listdir(directorio_origen):
-                if carpeta.startswith('2025'):
-                    ruta_2025 = os.path.join(directorio_origen, carpeta)
-                    if os.path.isdir(ruta_2025):
-                        ruta_facturas_salud = os.path.join(ruta_2025, 'FACTURAS_SALUD')
-                        if os.path.isdir(ruta_facturas_salud):
-                            for dir_name in os.listdir(ruta_facturas_salud):
-                                ruta_completa = os.path.join(ruta_facturas_salud, dir_name)
-                                if os.path.isdir(ruta_completa):
-                                    directorios_encontrados[dir_name] = ruta_completa
-        else:
-            for root, dirs, _ in os.walk(directorio_origen):
-                for dir_name in dirs:
-                    ruta_completa = os.path.join(root, dir_name)
-                    directorios_encontrados[dir_name] = ruta_completa
-
         directorios_validos_contar = 0
         for directorio in directorios:
-            if directorio in directorios_encontrados:
+            ruta_completa = self.buscar_directorio_en_cache(directorio)
+            if ruta_completa:
                 item = QListWidgetItem(directorio)
-                item.setData(Qt.UserRole, directorios_encontrados[directorio])
+                item.setData(Qt.UserRole, ruta_completa)
                 if item.text() not in [self.lista_directorios_copiar.item(i).text() for i in range(self.lista_directorios_copiar.count())]:
                     self.lista_directorios_copiar.addItem(item)
-                    item.setSelected(True)  # Seleccionar automáticamente el ítem
+                    item.setSelected(True)
                     directorios_validos_contar += 1
             else:
                 directorios_no_validos.append(directorio)
@@ -1354,9 +1623,11 @@ class CopiadorDirectorios(QMainWindow):
         for directorio in directorios:
             nombre_directorio = os.path.basename(directorio)
             if nombre_directorio not in directorios_existentes:
-                item = QListWidgetItem(nombre_directorio)
-                item.setData(Qt.UserRole, directorio)
-                self.lista_directorios_copiar.addItem(item)
+                ruta_completa = self.buscar_directorio_en_cache(nombre_directorio)  # Usa el nuevo método
+                if ruta_completa:
+                    item = QListWidgetItem(nombre_directorio)
+                    item.setData(Qt.UserRole, ruta_completa)
+                    self.lista_directorios_copiar.addItem(item)
         
         self.boton_copiar.setEnabled(self.destino_input.text().strip() != "" and self.lista_directorios_copiar.count() > 0)
         self.log_text.append(f"Agregados {len(directorios)} directorios mediante arrastrar y soltar.")
