@@ -1021,7 +1021,9 @@ class CopiadorDirectorios(QMainWindow):
         self.input_sufijo_zip.setText(self.settings.value("sufijo_zip", "", type=str))
         self.input_reemplazo_directorios.setText(self.settings.value("reemplazo_directorios", "", type=str))
         self.input_sufijo_directorios.setText(self.settings.value("sufijo_directorios", "", type=str))
-        
+        self.check_activar_renombrado_ad.setChecked(self.settings.value("check_renombrado_ad", False, type=bool))
+        self.input_reemplazo_ad.setText(self.settings.value("reemplazo_ad", "", type=str))
+        self.input_sufijo_ad.setText(self.settings.value("sufijo_ad", "", type=str))
 
         self.boton_copiar.setEnabled(
             self.origen_input.text().strip() != "" and 
@@ -1095,6 +1097,9 @@ class CopiadorDirectorios(QMainWindow):
         self.settings.setValue("tema_oscuro", self.check_tema_oscuro.isChecked())
         self.settings.setValue("anio_restriccion", self.anio_input.text())
         self.settings.setValue("meses_restriccion", self.meses_input.text())
+        self.settings.setValue("check_renombrado_ad", self.check_activar_renombrado_ad.isChecked())
+        self.settings.setValue("reemplazo_ad", self.input_reemplazo_ad.text())
+        self.settings.setValue("sufijo_ad", self.input_sufijo_ad.text())
 
         event.accept()
 
@@ -1208,7 +1213,10 @@ class CopiadorDirectorios(QMainWindow):
             texto_reemplazo_zip,
             texto_sufijo_zip,
             texto_reemplazo_directorios,
-            texto_sufijo_directorios
+            texto_sufijo_directorios,
+            self.check_activar_renombrado_ad.isChecked(),
+            self.input_reemplazo_ad.text().strip(),
+            self.input_sufijo_ad.text().strip()
         )
 
         self.worker_thread.progreso_signal.connect(self.actualizar_progreso_barra)
