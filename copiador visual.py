@@ -1156,7 +1156,10 @@ class CopiadorDirectorios(QMainWindow):
             'autorizacion_compensar': self.check_aut_compensar.isChecked(),
             'formato_json': self.check_formato_json.isChecked(),
             'txt_rips': self.check_txt_rips.isChecked(),
-            'txt_docker': self.check_txt_docker.isChecked()
+            'txt_docker': self.check_txt_docker.isChecked(),
+            'renombrar_ad': self.check_activar_renombrado_ad.isChecked(),
+            'reemplazo_ad': self.input_reemplazo_ad.text().strip(),
+            'sufijo_ad': self.input_sufijo_ad.text().strip(),
         }
 
         copiar_todo = self.check_copiar_sin_validar.isChecked()
@@ -1186,6 +1189,8 @@ class CopiadorDirectorios(QMainWindow):
         texto_sufijo_zip = self.input_sufijo_zip.text().strip() if self.check_activar_renombrado_zip.isChecked() and not copiar_todo else ""
         texto_reemplazo_directorios = self.input_reemplazo_directorios.text().strip() if self.check_activar_renombrado_directorios.isChecked() and not copiar_todo else ""
         texto_sufijo_directorios = self.input_sufijo_directorios.text().strip() if self.check_activar_renombrado_directorios.isChecked() and not copiar_todo else ""
+        texto_reemplazo_ad = self.input_reemplazo_ad.text().strip() if self.check_activar_renombrado_ad.isChecked() and not copiar_todo else ""
+        texto_sufijo_ad = self.input_sufijo_ad.text().strip() if self.check_activar_renombrado_ad.isChecked() and not copiar_todo else ""
 
         self.boton_copiar.setEnabled(False)
         self.boton_cancelar.setEnabled(True)
