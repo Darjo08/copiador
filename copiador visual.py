@@ -1021,6 +1021,7 @@ class CopiadorDirectorios(QMainWindow):
         self.input_sufijo_zip.setText(self.settings.value("sufijo_zip", "", type=str))
         self.input_reemplazo_directorios.setText(self.settings.value("reemplazo_directorios", "", type=str))
         self.input_sufijo_directorios.setText(self.settings.value("sufijo_directorios", "", type=str))
+        
 
         self.boton_copiar.setEnabled(
             self.origen_input.text().strip() != "" and 
