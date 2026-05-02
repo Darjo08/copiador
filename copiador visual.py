@@ -858,6 +858,26 @@ class CopiadorDirectorios(QMainWindow):
         dirs_layout.addRow(QLabel("Sufijo:"), self.input_sufijo_directorios)
         renaming_section_layout.addWidget(self.grupo_renombrado_directorios)
 
+        # renombrar ad 
+
+        self.grupo_renombrado_ad = QGroupBox("Renombrado AD.XML")
+        ad_layout = QFormLayout()
+        self.grupo_renombrado_ad.setLayout(ad_layout)
+        
+        self.check_activar_renombrado_ad = QCheckBox("Renombrar AD.XML")
+        self.check_activar_renombrado_ad.stateChanged.connect(self.actualizar_estado_renombrado_ad)
+        
+        self.input_reemplazo_ad = QLineEdit()
+        self.input_reemplazo_ad.setPlaceholderText("Opcional: Prefijo para AD")
+        self.input_sufijo_ad = QLineEdit()
+        self.input_sufijo_ad.setPlaceholderText("Opcional: Sufijo para AD")
+        
+        ad_layout.addRow(self.check_activar_renombrado_ad)
+        ad_layout.addRow(QLabel("Prefijo:"), self.input_reemplazo_ad)
+        ad_layout.addRow(QLabel("Sufijo:"), self.input_sufijo_ad)
+        
+        renaming_section_layout.addWidget(self.grupo_renombrado_ad)
+
         # Sección de lista y entrada manual
         list_manual_section_layout = QHBoxLayout()
         main_layout.addLayout(list_manual_section_layout)
@@ -1436,6 +1456,7 @@ class CopiadorDirectorios(QMainWindow):
         self.actualizar_estado_renombrado_docker()
         self.actualizar_estado_renombrado_zip()
         self.actualizar_estado_renombrado_directorios()
+        self.actualizar_estado_renombrado_ad()
 
     def actualizar_estado_renombrado_rips(self):
         esta_activado = self.check_activar_renombrado_rips.isChecked()
@@ -1457,6 +1478,11 @@ class CopiadorDirectorios(QMainWindow):
         self.input_reemplazo_directorios.setEnabled(enabled)
         self.input_sufijo_directorios.setEnabled(enabled)
         self.settings.setValue("check_renombrado_directorios", self.check_activar_renombrado_directorios.isChecked())
+
+    def actualizar_estado_renombrado_ad(self):
+        esta_activado = self.check_activar_renombrado_ad.isChecked()
+        self.input_reemplazo_ad.setEnabled(esta_activado)
+        self.input_sufijo_ad.setEnabled(esta_activado)
 
     def agregar_listado(self):
         archivo, _ = QFileDialog.getOpenFileName(self, "Seleccionar Archivo de Listado", "", "Archivos de Listado (*.txt *.xlsx *.xls);;Text Files (*.txt);;Excel Files (*.xlsx *.xls);;All Files (*)")
