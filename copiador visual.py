@@ -129,6 +129,8 @@ class WorkerCopia(QThread):
     def run(self):
         try:
             self.tiempo_inicio = time.time()
+            self.log_signal.emit(f"DEBUG CUV: descargar_cuv = {self.descargar_cuv}")
+            self.log_signal.emit(f"DEBUG CUV: Cantidad de directorios a procesar = {len(self.directorios_origen)}")
             self.log_signal.emit("Iniciando copia de directorios...")
             self.log_signal.emit(f"Directorios origen iniciales: {self.directorios_origen}")
             self.preparar_conteo_archivos()
