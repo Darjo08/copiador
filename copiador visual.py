@@ -129,8 +129,6 @@ class WorkerCopia(QThread):
     def run(self):
         try:
             self.tiempo_inicio = time.time()
-            self.log_signal.emit(f"DEBUG CUV: descargar_cuv = {self.descargar_cuv}")
-            self.log_signal.emit(f"DEBUG CUV: Cantidad de directorios a procesar = {len(self.directorios_origen)}")
             self.log_signal.emit("Iniciando copia de directorios...")
             self.log_signal.emit(f"Directorios origen iniciales: {self.directorios_origen}")
             self.preparar_conteo_archivos()
@@ -331,25 +329,7 @@ class WorkerCopia(QThread):
             self.finalizado_signal.emit()
         except Exception as e:
             self.error_signal.emit(f"Error durante la copia: {str(e)}")
-            if self.descargar_cuv and self.cuv_data:
-                try:
-                    archivo_cuv = os.path.join(self.directorio_destino, "CUVs_Exportados.txt")
-                    
-                    with open(archivo_cuv, 'w', encoding='utf-8', newline='') as f:
-                        writer = csv.writer(f, delimiter=',', quoting=csv.QUOTE_MINIMAL)
-                        # Encabezados
-                        writer.writerow(["NumFactura", "ProcesoId", "CodigoUnicoValidacion", 
-                                       "ResultState", "CantidadValidaciones", "Validaciones"])
-                        
-                        # Datos
-                        for fila in self.cuv_data:
-                            writer.writerow(fila)
-                    
-                    self.log_signal.emit(f"✅ Archivo CUVs_Exportados.txt generado correctamente en el destino con {len(self.cuv_data)} facturas.")
-                except Exception as e:
-                    self.log_signal.emit(f"❌ Error al generar archivo CUV: {str(e)}")
-            elif self.descargar_cuv:
-                self.log_signal.emit("⚠️ No se encontraron archivos Docker válidos para generar CUV.")
+            self.finalizado_signal.emit()
 
     def calcular_ruta_destino(self, ruta_origen, dir_origen, nombre_directorio):
         file = os.path.basename(ruta_origen)
@@ -563,24 +543,7 @@ class WorkerCopia(QThread):
                             else:
                                 shutil.copy2(ruta_origen, ruta_destino_final)
                                 self.log_signal.emit(f"Copiado: {ruta_origen} a {ruta_destino_final}")
-                            if self.descargar_cuv and es_docker:
-                                try:
-                                    docker_data = None
-                                    # Forzar recarga del JSON del Docker para mayor seguridad
-                                    for encoding in ['utf-8', 'latin-1', 'windows-1252']:
-                                        try:
-                                            with open(ruta_origen, 'r', encoding=encoding) as f:
-                                                docker_data = json.load(f)
-                                            break
-                                        except:
-                                            continue
-                                    
-                                    if docker_data and isinstance(docker_data, dict):
-                                        self.extraer_datos_cuv(docker_data, nombre_directorio)
-                                    else:
-                                        self.log_signal.emit(f"⚠️ No se pudo leer JSON de Docker: {file}")
-                                except Exception as e:
-                                    self.log_signal.emit(f"Error al extraer CUV de {file}: {str(e)}")
+                            
 
                             if os.path.exists(ruta_destino_final):
                                 self.log_signal.emit(f"Archivo confirmado en disco: {ruta_destino_final}")
@@ -1302,8 +1265,6 @@ class CopiadorDirectorios(QMainWindow):
             self.worker_thread.quit()
             self.worker_thread.wait()
 
-        print("Preparando WorkerCopia con Descargar CUV:", self.check_descargar_cuv.isChecked())    
-
         self.worker_thread = WorkerCopia(
             directorios_a_copiar,
             directorio_destino,
@@ -1324,7 +1285,6 @@ class CopiadorDirectorios(QMainWindow):
             texto_sufijo_ad,
             self.check_descargar_cuv.isChecked()
         )
-        print("WorkerCopia creado correctamente con descargar_cuv =", self.check_descargar_cuv.isChecked())
 
         self.worker_thread.progreso_signal.connect(self.actualizar_progreso_barra)
         self.worker_thread.log_signal.connect(self.log_copia)
