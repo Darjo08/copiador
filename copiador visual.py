@@ -93,6 +93,7 @@ class WorkerCopia(QThread):
         self.todos_los_errores = []
         self.validacion_autorizaciones = {}
         self.respuesta_pregunta = {}
+        self.cuv_data = []
         
 
     def find_all_keys_with_context(self, obj, target, context=None, results=None, path=None):
