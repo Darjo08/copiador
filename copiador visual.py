@@ -333,21 +333,21 @@ class WorkerCopia(QThread):
                 try:
                     archivo_cuv = os.path.join(self.directorio_destino, "CUVs_Exportados.txt")
                     
-                    with open(archivo_cuv, 'w', encoding='utf-8') as f:
+                    with open(archivo_cuv, 'w', encoding='utf-8', newline='') as f:
+                        writer = csv.writer(f, delimiter=',', quoting=csv.QUOTE_MINIMAL)
                         # Encabezados
-                        f.write("NumFactura,ProcesoId,CodigoUnicoValidacion,ResultState,CantidadValidaciones,Validaciones\n")
+                        writer.writerow(["NumFactura", "ProcesoId", "CodigoUnicoValidacion", 
+                                       "ResultState", "CantidadValidaciones", "Validaciones"])
                         
                         # Datos
                         for fila in self.cuv_data:
-                            # Escapar comas dentro del texto de validaciones
-                            fila_esc = [str(x).replace(',', ';') if isinstance(x, str) else str(x) for x in fila]
-                            linea = ",".join(fila_esc)
-                            f.write(linea + "\n")
+                            writer.writerow(fila)
                     
-                    self.log_signal.emit(f"Archivo CUVs_Exportados.txt generado correctamente con {len(self.cuv_data)} registros.")
+                    self.log_signal.emit(f"✅ Archivo CUVs_Exportados.txt generado correctamente en el destino con {len(self.cuv_data)} facturas.")
                 except Exception as e:
-                    self.log_signal.emit(f"Error al generar archivo CUV: {str(e)}")
-            self.finalizado_signal.emit()
+                    self.log_signal.emit(f"❌ Error al generar archivo CUV: {str(e)}")
+            elif self.descargar_cuv:
+                self.log_signal.emit("⚠️ No se encontraron archivos Docker válidos para generar CUV.")
 
     def calcular_ruta_destino(self, ruta_origen, dir_origen, nombre_directorio):
         file = os.path.basename(ruta_origen)
