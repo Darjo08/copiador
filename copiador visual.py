@@ -1233,9 +1233,6 @@ class CopiadorDirectorios(QMainWindow):
             texto_sufijo_zip,
             texto_reemplazo_directorios,
             texto_sufijo_directorios,
-            self.check_activar_renombrado_ad.isChecked(),
-            self.input_reemplazo_ad.text().strip(),
-            self.input_sufijo_ad.text().strip(),
             texto_reemplazo_ad,
             texto_sufijo_ad
         )
