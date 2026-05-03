@@ -768,6 +768,7 @@ class CopiadorDirectorios(QMainWindow):
         self.check_comprimir_zip.stateChanged.connect(self.actualizar_estado_comprimir)
         self.check_aut_compensar = QCheckBox("Aut Compensar")
         self.check_copiar_sin_validar = QCheckBox("Sin validar")
+        self.check_descargar_cuv = QCheckBox("Descargar CUV")
 
         # Reorganizar checkboxes en una cuadrícula 3x3
         extra_options_layout.addWidget(self.check_restringir_busqueda, 0, 0)
@@ -784,6 +785,7 @@ class CopiadorDirectorios(QMainWindow):
         extra_options_layout.addWidget(self.check_comprimir_zip, 2, 0)
         extra_options_layout.addWidget(self.check_aut_compensar, 2, 1)
         extra_options_layout.addWidget(self.check_copiar_sin_validar, 2, 2)
+        extra_options_layout.addWidget(self.check_descargar_cuv, 2, 3)
 
         top_section_layout.addWidget(extra_options_group)
         top_section_layout.setStretch(1, 2) # Columna derecha ocupa 2/3 del espacio
@@ -1038,6 +1040,7 @@ class CopiadorDirectorios(QMainWindow):
         self.check_activar_renombrado_ad.setChecked(self.settings.value("check_renombrado_ad", False, type=bool))
         self.input_reemplazo_ad.setText(self.settings.value("reemplazo_ad", "", type=str))
         self.input_sufijo_ad.setText(self.settings.value("sufijo_ad", "", type=str))
+        self.check_descargar_cuv.setChecked(self.settings.value("check_descargar_cuv", False, type=bool))
 
         self.boton_copiar.setEnabled(
             self.origen_input.text().strip() != "" and 
@@ -1114,6 +1117,7 @@ class CopiadorDirectorios(QMainWindow):
         self.settings.setValue("check_renombrado_ad", self.check_activar_renombrado_ad.isChecked())
         self.settings.setValue("reemplazo_ad", self.input_reemplazo_ad.text())
         self.settings.setValue("sufijo_ad", self.input_sufijo_ad.text())
+        self.settings.setValue("check_descargar_cuv", self.check_descargar_cuv.isChecked())
 
         event.accept()
 
@@ -1174,6 +1178,7 @@ class CopiadorDirectorios(QMainWindow):
             'renombrar_ad': self.check_activar_renombrado_ad.isChecked(),
             'reemplazo_ad': self.input_reemplazo_ad.text().strip(),
             'sufijo_ad': self.input_sufijo_ad.text().strip(),
+            'descargar_cuv': self.check_descargar_cuv.isChecked(),
         }
 
         copiar_todo = self.check_copiar_sin_validar.isChecked()
