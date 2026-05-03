@@ -1300,6 +1300,8 @@ class CopiadorDirectorios(QMainWindow):
             self.worker_thread.quit()
             self.worker_thread.wait()
 
+        print("Preparando WorkerCopia con Descargar CUV:", self.check_descargar_cuv.isChecked())    
+
         self.worker_thread = WorkerCopia(
             directorios_a_copiar,
             directorio_destino,
@@ -1320,6 +1322,7 @@ class CopiadorDirectorios(QMainWindow):
             texto_sufijo_ad,
             self.check_descargar_cuv.isChecked()
         )
+        print("WorkerCopia creado correctamente con descargar_cuv =", self.check_descargar_cuv.isChecked())
 
         self.worker_thread.progreso_signal.connect(self.actualizar_progreso_barra)
         self.worker_thread.log_signal.connect(self.log_copia)
