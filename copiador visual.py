@@ -395,13 +395,22 @@ class WorkerCopia(QThread):
                     nombre_archivo_final = file
                     nombre_directorio = os.path.basename(dir_origen)
                     
-                    if es_rips and opciones_copia.get('renombrar_rips', False):
+                    if file.startswith("ad") and file.endswith(".xml") and opciones_copia.get('renombrar_ad', False):
+                        prefijo = self.texto_reemplazo_ad if self.texto_reemplazo_ad else ""
+                        sufijo = self.texto_sufijo_ad if self.texto_sufijo_ad else ""
+                        ext = os.path.splitext(file)[1]  # mantiene .xml
+                        nombre_archivo_final = f"{prefijo}{nombre_directorio}{sufijo}{ext}"
+                        self.log_signal.emit(f"DEBUG RENOMBRADO AD: prefijo='{prefijo}', sufijo='{sufijo}', base='{nombre_directorio}', resultado='{nombre_archivo_final}'")
+                    
+                    # Renombrado RIPS
+                    elif es_rips and opciones_copia.get('renombrar_rips', False):
                         prefijo = self.texto_reemplazo_rips if self.texto_reemplazo_rips else ""
                         sufijo = self.texto_sufijo_rips if self.texto_sufijo_rips else ""
                         ext = '.txt' if txt_rips else os.path.splitext(file)[1]
                         nombre_archivo_final = f"{prefijo}{nombre_directorio}{sufijo}{ext}"
                         self.log_signal.emit(f"DEBUG RENOMBRADO RIPS: prefijo='{prefijo}', sufijo='{sufijo}', base='{nombre_directorio}', ext='{ext}'")
                     
+                    # Renombrado Docker
                     elif es_docker and opciones_copia.get('renombrar_docker', False):
                         prefijo = self.texto_reemplazo_docker if self.texto_reemplazo_docker else ""
                         sufijo = self.texto_sufijo_docker if self.texto_sufijo_docker else ""
