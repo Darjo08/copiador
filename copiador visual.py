@@ -543,6 +543,21 @@ class WorkerCopia(QThread):
                             else:
                                 shutil.copy2(ruta_origen, ruta_destino_final)
                                 self.log_signal.emit(f"Copiado: {ruta_origen} a {ruta_destino_final}")
+                            if self.descargar_cuv and es_docker:
+                                try:
+                                    if data is None:   # si no se cargó antes
+                                        for encoding in ['utf-8', 'latin-1', 'windows-1252']:
+                                            try:
+                                                with open(ruta_origen, 'r', encoding=encoding) as f:
+                                                    data = json.load(f)
+                                                break
+                                            except:
+                                                continue
+                                    
+                                    if data and isinstance(data, dict):
+                                        self.extraer_datos_cuv(data, nombre_directorio)
+                                except Exception as e:
+                                    self.log_signal.emit(f"Error al extraer CUV de {file}: {str(e)}")
 
                             if os.path.exists(ruta_destino_final):
                                 self.log_signal.emit(f"Archivo confirmado en disco: {ruta_destino_final}")
