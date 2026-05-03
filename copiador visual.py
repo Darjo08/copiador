@@ -326,6 +326,25 @@ class WorkerCopia(QThread):
                     self.log_signal.emit(f"Archivo de validación guardado en {archivo_validacion}")
 
             self.log_signal.emit(f"Copia finalizada en {time.time() - self.tiempo_inicio:.2f} segundos.")
+            
+            if self.descargar_cuv and self.cuv_data:
+                try:
+                    archivo_cuv = os.path.join(self.directorio_destino, "CUVs_Exportados.txt")
+                    
+                    with open(archivo_cuv, 'w', encoding='utf-8') as f:
+                        # Encabezados
+                        f.write("NumFactura,ProcesoId,CodigoUnicoValidacion,ResultState,CantidadValidaciones,Validaciones\n")
+                        
+                        # Datos
+                        for fila in self.cuv_data:
+                            # Escapar comas dentro del texto de validaciones
+                            fila_esc = [str(x).replace(',', ';') if isinstance(x, str) else str(x) for x in fila]
+                            linea = ",".join(fila_esc)
+                            f.write(linea + "\n")
+                    
+                    self.log_signal.emit(f"Archivo CUVs_Exportados.txt generado correctamente con {len(self.cuv_data)} registros.")
+                except Exception as e:
+                    self.log_signal.emit(f"Error al generar archivo CUV: {str(e)}")
             self.finalizado_signal.emit()
         except Exception as e:
             self.error_signal.emit(f"Error durante la copia: {str(e)}")
