@@ -61,7 +61,10 @@ class WorkerCopia(QThread):
     correccion_signal = pyqtSignal(str, str, dict)
     pregunta_directorios_signal = pyqtSignal(str, list)
 
-    def __init__(self, directorios_origen, directorio_destino, copiar_todo, opciones_copia, texto_reemplazo_rips, texto_sufijo_rips, texto_reemplazo_docker, texto_sufijo_docker, copiar_en_raiz, comprimir_zip, aut_compensar, texto_reemplazo_zip, texto_sufijo_zip, texto_reemplazo_directorios, texto_sufijo_directorios):
+    def __init__(self, directorios_origen, directorio_destino, copiar_todo, opciones_copia,
+                  texto_reemplazo_rips, texto_sufijo_rips, texto_reemplazo_docker, texto_sufijo_docker,
+                    copiar_en_raiz, comprimir_zip, aut_compensar, 
+                    texto_reemplazo_zip, texto_sufijo_zip, texto_reemplazo_directorios, texto_sufijo_directorios,texto_reemplazo_ad, texto_sufijo_ad):
         super().__init__()
         self.directorios_origen = directorios_origen
         self.directorio_destino = directorio_destino
@@ -78,6 +81,8 @@ class WorkerCopia(QThread):
         self.texto_sufijo_zip = texto_sufijo_zip
         self.texto_reemplazo_directorios = texto_reemplazo_directorios
         self.texto_sufijo_directorios = texto_sufijo_directorios
+        self.texto_reemplazo_ad = texto_reemplazo_ad
+        self.texto_sufijo_ad = texto_sufijo_ad
         self.formato_json = opciones_copia.get('formato_json', False)
         self.cancelar_flag = False
         self.archivos_copiados = 0
