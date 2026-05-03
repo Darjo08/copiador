@@ -619,6 +619,46 @@ class WorkerCopia(QThread):
             self.log_signal.emit(f"DEBUG (COPY CHECK): {file} no cumple ningún criterio - Resultado: False")
 
         return debe_copiar, tipo_archivo
+    
+    def extraer_datos_cuv(self, data, nombre_directorio):
+        """Extrae información del ResultadosDoker para el archivo CUV"""
+        try:
+            num_factura = str(data.get("NumFactura", ""))
+            proceso_id = str(data.get("ProcesoId", ""))
+            cuv = str(data.get("CodigoUnicoValidacion", ""))
+            result_state = str(data.get("ResultState", False)).lower()
+
+            # Procesar lista de validaciones
+            resultados = data.get("ResultadosValidacion", [])
+            cantidad = len(resultados)
+
+            validaciones_list = []
+            for res in resultados:
+                clase = res.get("Clase", "")
+                codigo = res.get("Codigo", "")
+                desc = res.get("Descripcion", "")
+                obs = res.get("Observaciones", "")
+                
+                texto = f"{codigo} - {clase} - {desc}"
+                if obs:
+                    texto += f" - {obs}"
+                validaciones_list.append(texto)
+
+            validaciones_concat = " | ".join(validaciones_list)
+
+            self.cuv_data.append([
+                num_factura,
+                proceso_id,
+                cuv,
+                result_state,
+                cantidad,
+                validaciones_concat
+            ])
+
+            self.log_signal.emit(f"✓ CUV extraído: {num_factura} ({nombre_directorio}) - {cantidad} validaciones")
+
+        except Exception as e:
+            self.log_signal.emit(f"Error extrayendo CUV de {nombre_directorio}: {str(e)}")
 
 class CacheWorker(QThread):
     progreso_signal = pyqtSignal(int)  # Para actualizar la barra de progreso
