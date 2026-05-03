@@ -1241,7 +1241,8 @@ class CopiadorDirectorios(QMainWindow):
             texto_reemplazo_directorios,
             texto_sufijo_directorios,
             texto_reemplazo_ad,
-            texto_sufijo_ad
+            texto_sufijo_ad,
+            self.check_descargar_cuv.isChecked()
         )
 
         self.worker_thread.progreso_signal.connect(self.actualizar_progreso_barra)
