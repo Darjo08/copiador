@@ -563,17 +563,20 @@ class WorkerCopia(QThread):
                                 self.log_signal.emit(f"Copiado: {ruta_origen} a {ruta_destino_final}")
                             if self.descargar_cuv and es_docker:
                                 try:
-                                    if data is None:   # si no se cargó antes
-                                        for encoding in ['utf-8', 'latin-1', 'windows-1252']:
-                                            try:
-                                                with open(ruta_origen, 'r', encoding=encoding) as f:
-                                                    data = json.load(f)
-                                                break
-                                            except:
-                                                continue
+                                    docker_data = None
+                                    # Forzar recarga del JSON del Docker para mayor seguridad
+                                    for encoding in ['utf-8', 'latin-1', 'windows-1252']:
+                                        try:
+                                            with open(ruta_origen, 'r', encoding=encoding) as f:
+                                                docker_data = json.load(f)
+                                            break
+                                        except:
+                                            continue
                                     
-                                    if data and isinstance(data, dict):
-                                        self.extraer_datos_cuv(data, nombre_directorio)
+                                    if docker_data and isinstance(docker_data, dict):
+                                        self.extraer_datos_cuv(docker_data, nombre_directorio)
+                                    else:
+                                        self.log_signal.emit(f"⚠️ No se pudo leer JSON de Docker: {file}")
                                 except Exception as e:
                                     self.log_signal.emit(f"Error al extraer CUV de {file}: {str(e)}")
 
